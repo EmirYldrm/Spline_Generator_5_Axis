@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111a24">
+    <meta name="description" content="Tarayıcıda çalışan 5 eksenli spline kaynak yolu ve G-code aracı.">
+    <title>Spline_Generator_5_Axis</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="importmap">
+      {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+    </script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">İstemci tarafında çalışan kaynak yolu aracı</p>
+        <h1>5 Eksen Spline Kaynak Yolu</h1>
+      </div>
+      <div class="top-actions">
+        <button id="sample-button" class="button secondary" type="button">Örnek yay yükle</button>
+        <button id="project-export" class="button secondary" type="button">Projeyi dışa aktar</button>
+        <label class="button secondary file-button">Proje içe aktar<input id="project-import" type="file" accept=".json,application/json"></label>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel input-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">01 / GİRDİ</p><h2>Kayıtlı noktalar</h2></div>
+          <span class="unit-note">Konum: mm · Açılar: derece</span>
+        </div>
+        <form id="point-form" class="point-form">
+          <label>X (mm)<input name="x" type="number" step="any" value="0" required></label>
+          <label>Y (mm)<input name="y" type="number" step="any" value="0" required></label>
+          <label>Z (mm)<input name="z" type="number" step="any" value="0" required></label>
+          <label>A (°)<input name="a" type="number" step="any" value="0" required></label>
+          <label>C (°)<input name="c" type="number" step="any" value="0" required></label>
+          <button class="button primary" type="submit">Nokta ekle</button>
+        </form>
+
+        <details class="paste-box">
+          <summary>Metin / G-code yapıştır veya dosyadan yükle</summary>
+          <div class="paste-content">
+            <label for="points-text">G-code, CSV veya boşluk / sekme ayraçlı noktalar</label>
+            <textarea id="points-text" rows="6" spellcheck="false" placeholder="X,Y,Z,C,A&#10;0,0,20,350,0&#10;20,10,20,355,5"></textarea>
+            <div class="inline-actions">
+              <button id="parse-text" type="button" class="button secondary">Metni noktalar olarak ekle</button>
+              <label class="button secondary file-button">Nokta dosyası seç<input id="points-file" type="file" accept=".txt,.csv,.nc,.gcode,text/plain,text/csv"></label>
+              <button id="clear-points" type="button" class="button quiet">Tüm noktaları sil</button>
+            </div>
+            <p id="parse-errors" class="message" aria-live="polite"></p>
+          </div>
+        </details>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>X</th><th>Y</th><th>Z</th><th>A</th><th>C</th><th>Sıra</th><th></th></tr></thead>
+            <tbody id="points-body"></tbody>
+          </table>
+          <p id="empty-points" class="empty-note">Henüz nokta eklenmedi. Örnek yay ile başlayabilirsiniz.</p>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <section class="panel settings-panel">
+          <div class="section-heading">
+            <div><p class="eyebrow">02 / YOL</p><h2>Spline ayarları</h2></div>
+          </div>
+          <div class="settings-grid">
+            <label>Yöntem
+              <select id="method">
+                <option value="centripetal">Centripetal Catmull–Rom</option>
+                <option value="natural">Natural cubic spline</option>
+                <option value="clamped">Clamped cubic spline</option>
+                <option value="linear">Lineer (spline yok)</option>
+              </select>
+            </label>
+            <label>Örnekleme
+              <select id="sampling-mode">
+                <option value="step">Sabit adım (mm)</option>
+                <option value="tolerance">Chordal tolerans (mm)</option>
+              </select>
+            </label>
+            <label id="step-field">Adım (mm)<input id="sample-step" type="number" min="0.01" step="any" value="2"></label>
+            <label id="tolerance-field" class="hidden">Tolerans (mm)<input id="chord-tolerance" type="number" min="0.001" step="any" value="0.25"></label>
+            <label>Maks. rotary adımı (°)<input id="rotary-step" type="number" min="0.1" step="any" value="5"></label>
+            <label>Feed hızı (mm/dk)<input id="feed-rate" type="number" min="0.01" step="any" value="300"></label>
+          </div>
+          <div class="check-row">
+            <label><input id="closed-loop" type="checkbox"> Kapalı yol</label>
+            <label><input id="unwrap-rotary" type="checkbox" checked> C/A unwrap</label>
+            <label><input id="reverse-c" type="checkbox"> C işaretini ters çevir</label>
+            <label><input id="reverse-a" type="checkbox"> A işaretini ters çevir</label>
+          </div>
+          <p class="hint">Unwrap önceki rotary yönünü korumaya çalışır; yön belirsizse en küçük geçişi varsayar. C/A işaret kutuları yalnızca 3D torç okunu etkiler, G-code açılarını değiştirmez.</p>
+        </section>
+
+        <section class="panel stats-panel">
+          <div class="section-heading"><div><p class="eyebrow">03 / ÖZET</p><h2>Yol bilgisi</h2></div></div>
+          <div class="stats">
+            <div><span>Yol uzunluğu</span><strong id="path-length">—</strong></div>
+            <div><span>Girdi noktası</span><strong id="input-count">0</strong></div>
+            <div><span>Çıkış noktası</span><strong id="output-count">0</strong></div>
+            <div><span>Tahmini süre</span><strong id="estimated-time">—</strong></div>
+          </div>
+          <label class="slider-label" for="path-slider">Yol simülasyonu <span id="slider-value">0%</span></label>
+          <input id="path-slider" type="range" min="0" max="1000" value="0">
+          <output id="current-position" class="position-readout">Simülasyon için geçerli bir yol oluşturun.</output>
+          <label class="check-inline"><input id="show-output-points" type="checkbox" checked> Çıkış noktalarını göster</label>
+        </section>
+      </section>
+
+      <section class="panel viewer-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">04 / 3D GÖRÜNÜM</p><h2>Kaynak yolu ve torç yönü</h2></div>
+          <button id="reset-view" class="button secondary" type="button">Görünümü sıfırla</button>
+        </div>
+        <div id="viewer" class="viewer" aria-label="3D kaynak yolu görünümü">
+          <div id="viewer-message" class="viewer-message">3D görünüm yükleniyor…</div>
+        </div>
+        <div class="legend"><span><i class="legend-dot original"></i> Kayıtlı noktalar</span><span><i class="legend-line"></i> Spline</span><span><i class="legend-dot generated"></i> G-code noktaları</span><span><i class="legend-arrow"></i> Torç yönü</span></div>
+      </section>
+
+      <section class="panel gcode-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">05 / ÇIKIŞ</p><h2>G-code şablonu</h2></div>
+          <div class="inline-actions">
+            <button id="copy-gcode" type="button" class="button secondary">Kopyala</button>
+            <button id="download-gcode" type="button" class="button primary">İndir (.nc)</button>
+          </div>
+        </div>
+        <div class="settings-grid gcode-settings">
+          <label>Başlık satırları<textarea id="gcode-header" rows="2">G90
+G21</textarea></label>
+          <label>Güvenli Z (mm)<input id="safe-z" type="number" step="any" value="50"></label>
+          <label>Kaynak başlat<textarea id="weld-start" rows="2">M3</textarea></label>
+          <label>Ön gaz / ark oturma gecikmesi (sn)<input id="start-delay" type="number" min="0" step="any" value="0.5"></label>
+          <label>Kaynak bitir<textarea id="weld-end" rows="2">M5</textarea></label>
+          <label>Krater doldurma gecikmesi (sn)<input id="end-delay" type="number" min="0" step="any" value="0.5"></label>
+          <label>Geri çekilme (mm)<input id="retract" type="number" min="0" step="any" value="5"></label>
+          <label>İlk segment hızı (mm/dk)<input id="first-feed" type="number" min="0.01" step="any" placeholder="Varsayılan feed"></label>
+          <label>Son segment hızı (mm/dk)<input id="last-feed" type="number" min="0.01" step="any" placeholder="Varsayılan feed"></label>
+          <label>Ondalık hane<input id="decimals" type="number" min="0" max="6" step="1" value="1"></label>
+          <label class="check-inline"><input id="line-numbers" type="checkbox"> Satır numarası (N) ekle</label>
+          <label>Bitiş satırları<textarea id="gcode-footer" rows="2"></textarea></label>
+        </div>
+        <label for="gcode-output" class="output-label">Üretilen program</label>
+        <textarea id="gcode-output" class="gcode-output" rows="14" readonly spellcheck="false" aria-live="polite"></textarea>
+        <p id="app-status" class="message" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+    <footer><span>Tarayıcıda yerel olarak çalışır; nokta verileri dışarı gönderilmez.</span><span>GitHub Pages · Statik ES modules</span></footer>
+  </body>
+</html>
