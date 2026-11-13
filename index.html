@@ -54,6 +54,20 @@
           </div>
         </details>
 
+        <details class="paste-box">
+          <summary>Tam G-code programında kaynak yollarını spline ile düzenle</summary>
+          <div class="paste-content">
+            <label for="gcode-program-source">Tam G-code programı</label>
+            <textarea id="gcode-program-source" rows="8" spellcheck="false"
+              placeholder="G-code programını buraya yapıştırın veya dosyadan yükleyin. M3–M5 arasında en az iki G1 bulunan kaynak blokları spline ile güncellenir."></textarea>
+            <div class="inline-actions">
+              <label class="button secondary file-button">G-code dosyası seç<input id="gcode-program-file" type="file" accept=".nc,.cnc,.gcode,.tap,.txt,text/plain"></label>
+              <button id="spline-program" type="button" class="button primary">Kaynak bloklarına spline uygula</button>
+              <button id="clear-program" type="button" class="button quiet">Programı temizle</button>
+            </div>
+          </div>
+        </details>
+
         <div class="table-wrap">
           <table>
             <thead><tr><th>#</th><th>X</th><th>Y</th><th>Z</th><th>A</th><th>C</th><th>Sıra</th><th></th></tr></thead>

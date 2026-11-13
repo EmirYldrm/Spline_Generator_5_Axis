@@ -95,6 +95,7 @@ export async function createViewer(container, messageElement) {
 
   function update(originalPoints, pathPoints, options = {}) {
     clearContent();
+    const pathSegments = Array.isArray(options.pathSegments) ? options.pathSegments : [pathPoints];
     const allPoints = [...originalPoints, ...pathPoints];
     if (originalPoints.length) {
       const sphere = new three.SphereGeometry(1, 16, 12);
@@ -106,12 +107,13 @@ export async function createViewer(container, messageElement) {
         content.add(marker);
       });
     }
-    if (pathPoints.length > 1) {
-      const positions = pathPoints.flatMap(point => [point.x, point.y, point.z]);
+    pathSegments.forEach(segment => {
+      if (segment.length < 2) return;
       const geometry = new three.BufferGeometry();
-      geometry.setAttribute("position", new three.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("position", new three.Float32BufferAttribute(
+        segment.flatMap(point => [point.x, point.y, point.z]), 3));
       content.add(new three.Line(geometry, new three.LineBasicMaterial({ color: 0x52d3b2, linewidth: 2 })));
-    }
+    });
     if (options.showOutput && pathPoints.length) {
       const geometry = new three.BufferGeometry();
       geometry.setAttribute("position", new three.Float32BufferAttribute(
