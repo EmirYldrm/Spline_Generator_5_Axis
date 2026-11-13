@@ -4,6 +4,7 @@ import { applySplineToProgram } from "./gcode-program.js";
 import { createViewer } from "./viewer.js";
 
 const STORAGE_KEY = "swSpline:project";
+const MACHINE_STORAGE_KEY = "swSpline:machine";
 const SETTING_IDS = [
   "method", "sampling-mode", "sample-step", "chord-tolerance", "rotary-step", "feed-rate",
   "closed-loop", "unwrap-rotary", "reverse-c", "reverse-a", "show-output-points",
@@ -23,6 +24,26 @@ let viewer = null;
 let fullProgramSource = null;
 let programViewerPoints = [];
 let programViewerPaths = [];
+let selectedMachine = "default";
+
+function restoreMachineSelection() {
+  try {
+    const saved = localStorage.getItem(MACHINE_STORAGE_KEY);
+    if (saved === "default" || saved === "ankara-6eksen") selectedMachine = saved;
+  } catch {
+    // Machine selection is optional when browser storage is unavailable.
+  }
+  $("#machine-select").value = selectedMachine;
+}
+
+function setMachineSelection(machineId) {
+  selectedMachine = machineId === "ankara-6eksen" ? machineId : "default";
+  try {
+    localStorage.setItem(MACHINE_STORAGE_KEY, selectedMachine);
+  } catch {
+    // Machine selection is optional when browser storage is unavailable.
+  }
+}
 
 function showMessage(element, text, kind = "") {
   element.textContent = text;
@@ -217,7 +238,8 @@ function updateGcode() {
         fullProgramSource,
         generatePath,
         currentSplineSettings(),
-        Number($("#decimals").value)
+        Number($("#decimals").value),
+        selectedMachine
       );
       $("#gcode-output").value = result.text;
       programViewerPoints = result.weldBlocks.flatMap(block => block.points);
@@ -459,6 +481,15 @@ $("#clear-program").addEventListener("click", () => {
   programViewerPaths = [];
   render({ persist: false });
 });
+$("#machine-select").addEventListener("change", event => {
+  setMachineSelection(event.target.value);
+  render({ persist: false });
+  showMessage(status,
+    selectedMachine === "ankara-6eksen"
+      ? "Ankara seçildi. M3–M5 içindeki spline G1 satırları W ekseniyle yazılacak; G0 satırları korunur."
+      : "Default seçildi. M3–M5 içindeki spline G1 satırları XYZAC biçiminde yazılacak.",
+    "success");
+});
 $("#points-file").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file) return;
@@ -551,6 +582,7 @@ $("#download-gcode").addEventListener("click", () => {
 });
 
 applySamplingVisibility();
+restoreMachineSelection();
 try {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
