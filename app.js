@@ -1,8 +1,10 @@
 import { generatePath, getToolDirection } from "./spline.js";
 import { generateGcode } from "./gcode.js";
+import { applySplineToProgram } from "./gcode-program.js";
 import { createViewer } from "./viewer.js";
 
 const STORAGE_KEY = "swSpline:project";
+const MACHINE_STORAGE_KEY = "swSpline:machine";
 const SETTING_IDS = [
   "method", "sampling-mode", "sample-step", "chord-tolerance", "rotary-step", "feed-rate",
   "closed-loop", "unwrap-rotary", "reverse-c", "reverse-a", "show-output-points",
@@ -19,6 +21,29 @@ let path = [];
 let pathLength = 0;
 let pathLengths = [];
 let viewer = null;
+let fullProgramSource = null;
+let programViewerPoints = [];
+let programViewerPaths = [];
+let selectedMachine = "default";
+
+function restoreMachineSelection() {
+  try {
+    const saved = localStorage.getItem(MACHINE_STORAGE_KEY);
+    if (saved === "default" || saved === "ankara-6eksen") selectedMachine = saved;
+  } catch {
+    // Machine selection is optional when browser storage is unavailable.
+  }
+  $("#machine-select").value = selectedMachine;
+}
+
+function setMachineSelection(machineId) {
+  selectedMachine = machineId === "ankara-6eksen" ? machineId : "default";
+  try {
+    localStorage.setItem(MACHINE_STORAGE_KEY, selectedMachine);
+  } catch {
+    // Machine selection is optional when browser storage is unavailable.
+  }
+}
 
 function showMessage(element, text, kind = "") {
   element.textContent = text;
@@ -107,26 +132,26 @@ function renderTable() {
   $("#input-count").textContent = String(points.length);
 }
 
-function interpolatePath(position) {
-  if (!path.length) return null;
-  if (path.length === 1) return path[0];
+function interpolatePath(position, activePath = path, activeLengths = pathLengths) {
+  if (!activePath.length) return null;
+  if (activePath.length === 1) return activePath[0];
   let segment;
   let fraction;
-  if (pathLengths.length > 1 && pathLengths[pathLengths.length - 1] > 1e-10) {
-    const target = position * pathLengths[pathLengths.length - 1];
+  if (activeLengths.length > 1 && activeLengths[activeLengths.length - 1] > 1e-10) {
+    const target = position * activeLengths[activeLengths.length - 1];
     segment = 1;
-    while (segment < pathLengths.length - 1 && pathLengths[segment] < target) segment += 1;
-    const span = pathLengths[segment] - pathLengths[segment - 1];
-    fraction = span > 0 ? (target - pathLengths[segment - 1]) / span : 0;
+    while (segment < activeLengths.length - 1 && activeLengths[segment] < target) segment += 1;
+    const span = activeLengths[segment] - activeLengths[segment - 1];
+    fraction = span > 0 ? (target - activeLengths[segment - 1]) / span : 0;
     segment -= 1;
   } else {
-    segment = Math.min(path.length - 2, Math.floor(position * (path.length - 1)));
-    fraction = position * (path.length - 1) - segment;
+    segment = Math.min(activePath.length - 2, Math.floor(position * (activePath.length - 1)));
+    fraction = position * (activePath.length - 1) - segment;
   }
   const result = {};
   for (const axis of AXES) {
-    result[axis] = path[segment][axis] +
-      (path[segment + 1][axis] - path[segment][axis]) * fraction;
+    result[axis] = activePath[segment][axis] +
+      (activePath[segment + 1][axis] - activePath[segment][axis]) * fraction;
   }
   return result;
 }
@@ -134,7 +159,22 @@ function interpolatePath(position) {
 function updateSimulation() {
   const fraction = Number($("#path-slider").value) / Number($("#path-slider").max);
   $("#slider-value").textContent = `${Math.round(fraction * 100)}%`;
-  const point = interpolatePath(fraction);
+  const programPath = fullProgramSource !== null
+    ? programViewerPaths.find(segment => segment.length > 1) || []
+    : path;
+  const activePath = fullProgramSource !== null ? programPath : path;
+  const activeLengths = fullProgramSource !== null
+    ? activePath.reduce((lengths, point, index) => {
+      if (index > 0) {
+        const previous = activePath[index - 1];
+        lengths.push(lengths[index - 1] + Math.hypot(
+          point.x - previous.x, point.y - previous.y, point.z - previous.z
+        ));
+      }
+      return lengths;
+    }, [0])
+    : pathLengths;
+  const point = interpolatePath(fraction, activePath, activeLengths);
   if (!point) {
     $("#current-position").textContent = "Simülasyon için geçerli bir yol oluşturun.";
     viewer?.setSimulation(null);
@@ -147,6 +187,25 @@ function updateSimulation() {
 }
 
 function updateStats() {
+  if (fullProgramSource !== null) {
+    const inputCount = programViewerPoints.length;
+    const outputCount = programViewerPaths.reduce((count, segment) => count + segment.length, 0);
+    const totalLength = programViewerPaths.reduce((total, segment) => {
+      for (let index = 1; index < segment.length; index += 1) {
+        total += Math.hypot(
+          segment[index].x - segment[index - 1].x,
+          segment[index].y - segment[index - 1].y,
+          segment[index].z - segment[index - 1].z
+        );
+      }
+      return total;
+    }, 0);
+    $("#path-length").textContent = outputCount ? `${totalLength.toFixed(2)} mm` : "—";
+    $("#input-count").textContent = String(inputCount);
+    $("#output-count").textContent = String(outputCount);
+    $("#estimated-time").textContent = "—";
+    return;
+  }
   $("#path-length").textContent = path.length ? `${pathLength.toFixed(2)} mm` : "—";
   $("#output-count").textContent = String(path.length);
   const feed = Number($("#feed-rate").value);
@@ -160,7 +219,12 @@ function updateStats() {
 }
 
 function updateViewer() {
-  viewer?.update(points, path, {
+  const isProgramView = fullProgramSource !== null;
+  const viewerPoints = isProgramView ? programViewerPoints : points;
+  const viewerPaths = isProgramView ? programViewerPaths : [path];
+  const viewerPath = viewerPaths.flat();
+  viewer?.update(viewerPoints, viewerPath, {
+    pathSegments: viewerPaths,
     showOutput: $("#show-output-points").checked,
     getToolDirection: (c, a) => getToolDirection(c, a, $("#reverse-c").checked, $("#reverse-a").checked)
   });
@@ -168,6 +232,35 @@ function updateViewer() {
 }
 
 function updateGcode() {
+  if (fullProgramSource !== null) {
+    try {
+      const result = applySplineToProgram(
+        fullProgramSource,
+        generatePath,
+        currentSplineSettings(),
+        Number($("#decimals").value),
+        selectedMachine
+      );
+      $("#gcode-output").value = result.text;
+      programViewerPoints = result.weldBlocks.flatMap(block => block.points);
+      programViewerPaths = result.weldBlocks.map(block => block.path);
+      updateStats();
+      updateViewer();
+      const converted = `${result.convertedBlocks} kaynak bloğu spline ile güncellendi.`;
+      const skipped = result.skippedBlocks
+        ? ` ${result.skippedBlocks} tek G1'li blok değiştirilmedi.`
+        : "";
+      showMessage(status, converted + skipped, "success");
+    } catch (error) {
+      $("#gcode-output").value = "";
+      programViewerPoints = [];
+      programViewerPaths = [];
+      updateStats();
+      updateViewer();
+      showMessage(status, error.message, "error");
+    }
+    return;
+  }
   if (path.length < 2) {
     $("#gcode-output").value = "";
     return;
@@ -361,6 +454,42 @@ pointsBody.addEventListener("click", event => {
 });
 
 $("#parse-text").addEventListener("click", () => appendParsedText($("#points-text").value));
+$("#gcode-program-file").addEventListener("change", async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    $("#gcode-program-source").value = await file.text();
+    showMessage(parseErrors, `${file.name} tam program olarak yüklendi.`, "success");
+  } catch (error) {
+    showMessage(parseErrors, `G-code dosyası okunamadı: ${error.message}`, "error");
+  }
+  event.target.value = "";
+});
+$("#spline-program").addEventListener("click", () => {
+  const source = $("#gcode-program-source").value;
+  if (!source.trim()) {
+    showMessage(status, "Önce dönüştürülecek tam G-code programını yükleyin veya yapıştırın.", "error");
+    return;
+  }
+  fullProgramSource = source;
+  render({ persist: false });
+});
+$("#clear-program").addEventListener("click", () => {
+  $("#gcode-program-source").value = "";
+  fullProgramSource = null;
+  programViewerPoints = [];
+  programViewerPaths = [];
+  render({ persist: false });
+});
+$("#machine-select").addEventListener("change", event => {
+  setMachineSelection(event.target.value);
+  render({ persist: false });
+  showMessage(status,
+    selectedMachine === "ankara-6eksen"
+      ? "Ankara seçildi. M3–M5 içindeki spline G1 satırları W ekseniyle yazılacak; G0 satırları korunur."
+      : "Default seçildi. M3–M5 içindeki spline G1 satırları XYZAC biçiminde yazılacak.",
+    "success");
+});
 $("#points-file").addEventListener("change", async event => {
   const file = event.target.files[0];
   if (!file) return;
@@ -453,6 +582,7 @@ $("#download-gcode").addEventListener("click", () => {
 });
 
 applySamplingVisibility();
+restoreMachineSelection();
 try {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
